@@ -1,0 +1,2 @@
+Failed to send email for TEST test: (421, b'opmta1mto09aub smtp.orange.fr Kg4IuCj9S9ZLl Trop de connexions, veuillez verifier votre configuration. Too many connections, slow down. OFR104_104 [104]')
+Failed to send email for TEST2 test2: (421, b'opmta1mto09aub smtp.orange.fr Kg4IuCj9T9ZLl Trop de connexions, veuillez verifier votre configuration. Too many connections, slow down. OFR104_104 [104]')

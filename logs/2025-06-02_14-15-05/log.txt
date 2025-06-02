@@ -1,0 +1,2 @@
+No attachment found for TEST test, skipped.
+No attachment found for TEST2 test2, skipped.
