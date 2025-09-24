@@ -12,7 +12,7 @@ from Rapports_trimestriel_ASH import effectuer_rapport_ASH_async_limited
 
 def resource_path(relative_path):
     try:
-        base_path = sys._MEIPASS2
+        base_path = sys._MEIPASS2 # type: ignore
     except Exception:
         base_path = os.path.abspath(".")
     return os.path.join(base_path, relative_path)
