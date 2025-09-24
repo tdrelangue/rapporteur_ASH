@@ -52,6 +52,7 @@ Name: "{app}\Protégés"
 [Files]
 Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\ASH\dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\ASH\dist\assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\ASH\dist\templates\*"; DestDir: "{app}\templates"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "C:\Users\tdrelangue\OneDrive\programmes\TMJ solutions\Proxima\ASH\dist\.env"; DestDir: "{app}"; Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
