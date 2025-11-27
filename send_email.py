@@ -20,14 +20,12 @@ def guess_imap_host(email: str | None) -> str | None:
     if email is None:
         return None
     domain = email.split("@")[-1].lower()
-    if domain == "gmail.com":
-        return "imap.gmail.com"
-    if any(k in domain for k in ("outlook","hotmail","live","office365")):
+    
+    if any(k in domain.split(".")[0] for k in ("outlook","hotmail","live","office365")):
         return "outlook.office365.com"
     if "yahoo" in domain:
         return "imap.mail.yahoo.com"
-    if "orange.fr" in domain:
-        return "imap.orange.fr"
+    
     return f"imap.{domain}"
 
 def bytes_size(paths):
@@ -56,7 +54,7 @@ def smtp_connect():
     port = int(os.getenv("SMTP_PORT", "465"))
     use_ssl = os.getenv("SMTP_SSL", "1") == "1"
     user = os.getenv("email")
-    pwd  = os.getenv("email_pwd")
+    pwd  = os.getenv("imap_pwd")
     if use_ssl:
         s = smtplib.SMTP_SSL(host, port, timeout=60)
         s.ehlo()
@@ -157,19 +155,18 @@ def send_email(ctx=None, dev=False):
     # 4) Envoi SMTP vérifié
     result = smtp_send_verified(msg)
 
-    IMAP_PASSWORD = os.getenv('email_pwd')
+    # %) Enregistrement IMAP
+    IMAP_PASSWORD = os.getenv('imap_pwd')
     MAIL_USERNAME = os.getenv('email','assistante.drelangue@orange.fr')
     IMAP_SERVER = guess_imap_host(MAIL_USERNAME)
 
-    box = os.getenv('Mailbox_name',"INBOX/ASH")
+    box = os.getenv('Mailbox_name',find_closest_folder("INBOX/ASH", MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
     add_Email2box(msg, box, IMAP_SERVER, IMAP_PASSWORD, MAIL_USERNAME)
 
-    box = os.getenv('Sent_name',"INBOX/OUTBOX")
+    box = os.getenv('Sent_name', find_sent_folder(MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
     add_Email2box(msg, box, IMAP_SERVER, IMAP_PASSWORD, MAIL_USERNAME)
-
 
     wait_for_email(box, msg["Subject"], MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)
-
 
     # 6) Nettoyage zip si créé
     if tmpdir: shutil.rmtree(tmpdir, ignore_errors=True)
