@@ -3,9 +3,13 @@ import os, smtplib, imaplib, zipfile, tempfile, shutil
 from email.message import EmailMessage
 from email.utils import make_msgid, formatdate
 from datetime import datetime
-import imaplib, os, time, re
+import  time, re
 from dotenv import load_dotenv
 from Email import compose_email  # réutilisé
+from imap_handler import *
+
+from icecream import ic
+ic.disable()
 
 B64_OVERHEAD = float(os.getenv("B64_OVERHEAD", "1.37"))
 MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))  # seuil avant zip
@@ -90,14 +94,16 @@ def smtp_send_verified(msg: EmailMessage):
         # has_extn gère les cas-insensibles si dispo
         support_dsn = (hasattr(s, "has_extn") and s.has_extn("dsn")) or ("dsn" in feats)
 
-        rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (want_dsn and support_dsn) else None
+        rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"]
+        mail_opts = []  # or "RET=HDRS"
         res["used_dsn"] = bool(rcpt_opts)
 
         try:
             if rcpt_opts:
-                s.send_message(msg, mail_options=[], rcpt_options=rcpt_opts)
+                s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
+                
             else:
-                s.send_message(msg, mail_options=[])
+                s.send_message(msg, mail_options=mail_opts)
             res["accepted"] = True
         except smtplib.SMTPRecipientsRefused as e:
             # Si le serveur a interprété NOTIFY comme partie de l'adresse, retente sans DSN
@@ -113,59 +119,6 @@ def smtp_send_verified(msg: EmailMessage):
         except Exception: s.close()
     return res
 
-
-def _normalize_name(s: str) -> str:
-    # retire quotes et guillemets
-    return s.strip().strip('"').strip()
-
-def _list_mailboxes(imap: imaplib.IMAP4_SSL) -> list[str]:
-    typ, data = imap.list()
-    if typ != "OK" or not data: return []
-    boxes = []
-    for raw in data:
-        line = raw.decode(errors="ignore") # type: ignore
-        # format typique: (* FLAGS) "DELIM" "NAME"
-        m = re.search(r'".*"\s+"(.+)"$', line)
-        boxes.append(_normalize_name(m.group(1) if m else line.split()[-1]))
-    return boxes
-
-def _guess_sent_folder(candidates: list[str]) -> str | None:
-    # ordre de préférence
-    prefs = ["Sent", "Envoyés", "Envoyes", "INBOX.Sent", "INBOX/Sent", "Boîte d’envoi", "Envoyati", "[Gmail]/Sent Mail"]
-    low = {c.lower(): c for c in candidates}
-    print(candidates)
-    for p in prefs:
-        if p.lower() in low: return low[p.lower()]
-    # heuristique: mot-clé
-    for c in candidates:
-        if "sent" in c.lower() or "envoy" in c.lower():
-            return c
-    return None
-
-def imap_append_sent(raw_msg: bytes) -> tuple[bool, str | None]:
-    user = os.getenv("email"); pwd = os.getenv("email_pwd")
-    host = guess_imap_host(user or "")
-    if not (host and user and pwd):
-        return False, "IMAP config incomplète"
-
-    try:
-        imap = imaplib.IMAP4_SSL(host)
-        imap.login(user, pwd)
-
-        boxes = _list_mailboxes(imap)
-        print(boxes)
-        folder = _guess_sent_folder(boxes) or os.getenv("IMAP_SENT_FOLDER", "Sent")
-
-        # crée 'Sent' si inexistant
-        if folder not in boxes and folder == "Sent":
-            imap.create("Sent")
-
-        date_str = imaplib.Time2Internaldate(time.time())
-        typ, _ = imap.append(folder, '', date_str, raw_msg)
-        imap.logout()
-        return (typ == "OK"), (None if typ == "OK" else f"APPEND={typ} dossier={folder}")
-    except Exception as e:
-        return False, str(e)
 
 def send_email(ctx=None, dev=False):
     if ctx is None:
@@ -185,6 +138,14 @@ def send_email(ctx=None, dev=False):
     msg = compose_email(ctx)  # From/To/Subject/Body déjà posés
     mid = msg["Message-ID"]
 
+    load_dotenv()
+    sender = os.getenv("email", "expediteur@example.com")
+
+    # Demande d'accusé de lecture (MDN)
+    msg["Disposition-Notification-To"] = sender
+    # Vieille variante encore utilisée par certains clients
+    msg["Return-Receipt-To"] = sender
+
     # 3) Pièces jointes + zip si trop gros
     
     tmpdir = None
@@ -196,24 +157,32 @@ def send_email(ctx=None, dev=False):
     # 4) Envoi SMTP vérifié
     result = smtp_send_verified(msg)
 
-    # 5) Copie IMAP “Envoyés” optionnelle
-    if IMAP_COPY_SENT and result["accepted"]:
-        ok, err = imap_append_sent(msg.as_bytes())
-        result["copied_sent"] = ok
-        if not ok and err: print(f"[IMAP] Append échec: {err}")
+    IMAP_PASSWORD = os.getenv('email_pwd')
+    MAIL_USERNAME = os.getenv('email','assistante.drelangue@orange.fr')
+    IMAP_SERVER = guess_imap_host(MAIL_USERNAME)
+
+    box = os.getenv('Mailbox_name',"INBOX/ASH")
+    add_Email2box(msg, box, IMAP_SERVER, IMAP_PASSWORD, MAIL_USERNAME)
+
+    box = os.getenv('Sent_name',"INBOX/OUTBOX")
+    add_Email2box(msg, box, IMAP_SERVER, IMAP_PASSWORD, MAIL_USERNAME)
+
+
+    wait_for_email(box, msg["Subject"], MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)
+
 
     # 6) Nettoyage zip si créé
     if tmpdir: shutil.rmtree(tmpdir, ignore_errors=True)
 
     # 7) Rapport console
-    if not dev:
-        print("=== ENVOI ===")
-        print(f"Message-ID: {mid}")
-        print(f"SMTP accepté: {result['accepted']}")
-        print(f"DSN utilisé: {result['used_dsn']}")
-        print(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
-        print(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {MAX_MB} MB)")
-        if size_mb > MAX_MB: print("→ Fichiers zippés avant envoi.")
+    ic("=== ENVOI ===")
+    ic(f"Message-ID: {mid}")
+    ic(f"SMTP accepté: {result['accepted']}")
+    ic(f"DSN utilisé: {result['used_dsn']}")
+    ic(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
+    ic(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {MAX_MB} MB)")
+    if size_mb > MAX_MB: ic("→ Fichiers zippés avant envoi.")
 
 if __name__ == "__main__":
+    ic.enable()
     send_email()

@@ -1,9 +1,0 @@
-Bonjour,
-
-Veuillez trouver ci-joint les justificatifs pour le ${tri} TR $year dans le dossier de $name
-envoyé le $date.
-
-Cordialement,
-
-$sender_name
-$sender_role
