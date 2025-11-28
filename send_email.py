@@ -49,7 +49,7 @@ def attach_files(msg: EmailMessage, paths):
                                filename=os.path.basename(p))
 
 def smtp_connect():
-    load_dotenv()
+    load_dotenv(override=True)
     host = os.getenv("SMTP_HOST", "smtp.orange.fr")
     port = int(os.getenv("SMTP_PORT", "465"))
     use_ssl = os.getenv("SMTP_SSL", "1") == "1"
@@ -137,7 +137,7 @@ def send_email(ctx=None, dev=False):
     msg = compose_email(ctx)  # From/To/Subject/Body déjà posés
     mid = msg["Message-ID"]
 
-    load_dotenv()
+    load_dotenv(override=True)
     sender = os.getenv("email", "expediteur@example.com")
 
     # Demande d'accusé de lecture (MDN)

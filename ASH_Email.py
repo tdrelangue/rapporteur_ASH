@@ -19,7 +19,7 @@ def resource_path(relative_path):
 
 ENV_FILE = resource_path(".env")
 
-load_dotenv()
+load_dotenv(override=True)
 
 class ASHGUI(ctk.CTk):
     def __init__(self):

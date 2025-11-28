@@ -122,7 +122,7 @@ def read_mailbox(BOX, MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER):
 
 
 if __name__=="__main__":
-    load_dotenv()
+    load_dotenv(override=True)
     MAIL_PASSWORD = os.getenv('email_pwd')
     MAIL_USERNAME = os.getenv('email','assistante.drelangue@orange.fr')
     IMAP_SERVER = "imap.orange.fr"

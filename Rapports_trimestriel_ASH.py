@@ -9,7 +9,7 @@ from icecream import ic
 from send_email import send_email
 
 # ---------- Configuration ----------
-load_dotenv()
+load_dotenv(override=True)
 B64_OVERHEAD   = 1.37
 DEFAULT_MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))   # info log
 CONCURRENCY    = int(os.getenv("SMTP_CONCURRENCY", "1")) # séquentiel par défaut
@@ -37,7 +37,7 @@ def _env(key: str, default: str = "") -> str:
     return default if v is None else v.replace("\\n", "\n")
 
 def get_env() -> tuple[str, str, str, str, str]:
-    load_dotenv()
+    load_dotenv(override=True)
     sender   = _env("email")
     pwd      = _env("email_pwd")
     to       = _env("emailrec")
@@ -187,7 +187,7 @@ async def effectuer_rapport_ASH_async_limited(status_callback) -> None:
     sender, pwd, recipient, subj_tpl, body_tpl = get_env()
     run_dir = init_log_session()
     tri, yr, suffix = current_trimester()
-    load_dotenv()
+    load_dotenv(override=True)
     move_after_ok = ic(not bool(os.getenv("TEST_MODE", "1")))
 
     status_callback("Préparation des envois…")
@@ -214,7 +214,7 @@ async def effectuer_rapport_ASH_async_limited(status_callback) -> None:
                 tri=tri, yr=yr, suffix=suffix,
                 files=files,
                 log_dir=run_dir,
-                move_after_ok=move_after_ok
+                move_after_ok=move_after_ok #type:ignore
             )
         )
 
