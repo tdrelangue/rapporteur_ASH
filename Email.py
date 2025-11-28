@@ -19,7 +19,7 @@ def compose_email(context: dict) -> EmailMessage:
     load_dotenv()
     sender = os.getenv("email", "expediteur@example.com")
     recipient = os.getenv("emailrec", "destinataire@example.com")
-    subject_tpl =  "Rapport APA Timestre {tri} Année {year} – {name}"
+    subject_tpl =  "Rapport ASH Timestre {tri} Année {year} – {name}"
 
     # Lecture templates
     body_txt_tpl = load_template("body.txt")

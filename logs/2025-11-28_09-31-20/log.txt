@@ -1,0 +1,3 @@
+[2025-11-28 09:31:20] TEST test: tentative as-is, taille SMTP≈1.05MB (seuil info 19.0MB)
+[2025-11-28 09:31:22] OK(as-is) TEST test MID=<176431868092.14748.10988559537871220496@orange.fr> SMTP=smtp.orange.fr:465 size≈1.05MB
+[2025-11-28 09:31:22] Résumé: 1 succès, 0 échecs.

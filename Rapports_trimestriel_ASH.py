@@ -5,14 +5,16 @@ from email.message import EmailMessage
 from email.utils import make_msgid, formatdate
 from datetime import datetime, date
 from dotenv import load_dotenv
+from icecream import ic
+from send_email import send_email
 
 # ---------- Configuration ----------
+load_dotenv()
 B64_OVERHEAD   = 1.37
 DEFAULT_MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))   # info log
 CONCURRENCY    = int(os.getenv("SMTP_CONCURRENCY", "1")) # séquentiel par défaut
 REQUEST_DSN    = os.getenv("SMTP_REQUEST_DSN", "1") == "1"
 COPY_TO_SENT   = os.getenv("IMAP_COPY_SENT", "0") == "1"
-IMAP_SENT_FOLDER = os.getenv("IMAP_SENT_FOLDER", '"Sent"')
 PROTEGES_DIR   = os.getenv("PROTEGES_DIR", "Protégés")
 LOG_DIR        = os.getenv("LOG_DIR", "logs")
 
@@ -111,55 +113,17 @@ def build_message(sender: str, to: str, subject: str, body_txt: str, attachments
             msg.add_attachment(f.read(), maintype="application", subtype="octet-stream", filename=os.path.basename(p))
     return msg
 
-def smtp_send_message(msg, smtp_host, smtp_port, use_ssl, user, pwd, request_dsn: bool) -> None:
-    mail_opts = []
-    if use_ssl:
-        with smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=60) as s:
-            s.ehlo(); s.login(user, pwd)
-            feats = getattr(s, "esmtp_features", {}) or {}
-            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and "dsn" in feats) else []
-            try:
-                s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
-            except smtplib.SMTPRecipientsRefused as e:
-                bad = next(iter(e.recipients.values()))
-                if b"NOTIFY=" in bad[1] or "NOTIFY=" in str(bad[1]):
-                    s.send_message(msg, mail_options=mail_opts)  # retry sans DSN
-                else:
-                    raise
-    else:
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=60) as s:
-            s.ehlo(); s.starttls(); s.ehlo(); s.login(user, pwd)
-            feats = getattr(s, "esmtp_features", {}) or {}
-            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"] if (request_dsn and "dsn" in feats) else []
-            try:
-                s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
-            except smtplib.SMTPRecipientsRefused as e:
-                bad = next(iter(e.recipients.values()))
-                if b"NOTIFY=" in bad[1] or "NOTIFY=" in str(bad[1]):
-                    s.send_message(msg, mail_options=mail_opts)
-                else:
-                    raise
 
-def imap_append_sent(imap_host: str, user: str, pwd: str, raw_msg: bytes) -> Optional[str]:
-    try:
-        imap = imaplib.IMAP4_SSL(imap_host)
-        imap.login(user, pwd)
-        date_str = imaplib.Time2Internaldate(time.time())
-        typ, _ = imap.append(IMAP_SENT_FOLDER, '', date_str, raw_msg)
-        imap.logout()
-        return None if typ == "OK" else f"IMAP APPEND non OK: {typ}"
-    except Exception as e:
-        return str(e)
 
 # ---------- Envoi 1 protégé avec fallback zip ----------
 async def _send_one(
     sem: asyncio.Semaphore,
     protege_name: str,
     sender: str,
-    pwd: str,
-    recipient: str,
-    subj_tpl: str,
-    body_tpl: str,
+    pwd: str,              # peut devenir inutile si send_email lit tout depuis .env
+    recipient: str,        # idem, suivant comment compose_email fonctionne
+    subj_tpl: str,         # probablement plus utile non plus
+    body_tpl: str,         # idem
     tri: int,
     yr: int,
     suffix: str,
@@ -168,57 +132,41 @@ async def _send_one(
     move_after_ok: bool = True,
 ) -> bool:
     async with sem:
-        smtp_host, smtp_port, use_ssl, imap_host = get_smtp_config(sender)
-        sig_txt = get_signature_txt()
-        ctx = {"name": protege_name, "tri": tri, "year": yr, "suffix": suffix, "date": datetime.now().strftime("%d/%m/%Y")}
-        subject = subj_tpl.format_map(ctx)
-        body_txt = (body_tpl.format_map(ctx).rstrip() + ("\n\n" + sig_txt if sig_txt else "")).strip()
+        # Contexte pour ta fonction send_email
+        ctx = {
+            "name": protege_name,
+            "tri": tri,
+            "year": yr,
+            "suffix": suffix,
+            "date": datetime.now().strftime("%d/%m/%Y"),
+            "sender_name": os.getenv("NameSender", ""),
+            "sender_role": os.getenv("Role", ""),
+            "attachments": files,
+        }
 
-        # Log info pré-envoi
+        # Log pré-envoi (facultatif)
         info_mb = attachments_size_mb(files) * B64_OVERHEAD
-        log_message(log_dir, f"{protege_name}: tentative as-is, taille SMTP≈{info_mb:.2f}MB (seuil info {DEFAULT_MAX_MB}MB)")
+        log_message(
+            log_dir,
+            f"{protege_name}: tentative via send_email, taille SMTP≈{info_mb:.2f}MB (seuil info {DEFAULT_MAX_MB}MB)"
+        )
 
-        # Tentative 1: as-is
         try:
-            msg = build_message(sender, recipient, subject, body_txt, files)
-            mid = msg["Message-ID"]
-            smtp_send_message(msg, smtp_host, smtp_port, use_ssl, sender, pwd, REQUEST_DSN)
-            log_message(log_dir, f"OK(as-is) {protege_name} MID={mid} SMTP={smtp_host}:{smtp_port} size≈{info_mb:.2f}MB")
-            if COPY_TO_SENT and imap_host:
-                err = imap_append_sent(imap_host, sender, pwd, msg.as_bytes())
-                if err: log_message(log_dir, f"IMAP APPEND échec {protege_name} MID={mid}: {err}")
-                else:   log_message(log_dir, f"IMAP APPEND OK {protege_name} MID={mid}")
-            if move_after_ok:
-                _archive_and_clear_files(log_dir, protege_name, files)
-            return True
-        except smtplib.SMTPResponseException as e:
-            code = getattr(e, "smtp_code", None)
-            err  = getattr(e, "smtp_error", b"").decode(errors="ignore")
-            log_message(log_dir, f"First attempt FAIL {protege_name} code={code} err={err}")
-        except Exception as e:
-            log_message(log_dir, f"First attempt FAIL {protege_name} err={e}")
+            # send_email est sync → on le pousse dans un thread pour ne pas bloquer l'event loop
+            success = await asyncio.to_thread(send_email, ctx, False)
 
-        # Tentative 2: ZIP fallback
-        tmpdir = None
-        try:
-            zipped, tmpdir = zip_attachments(protege_name, files)
-            est_zip_mb = attachments_size_mb(zipped) * B64_OVERHEAD
-            msg2 = build_message(sender, recipient, f"{subject} (ZIP)", body_txt, zipped)
-            mid2 = msg2["Message-ID"]
-            smtp_send_message(msg2, smtp_host, smtp_port, use_ssl, sender, pwd, REQUEST_DSN)
-            log_message(log_dir, f"OK(fallback-zip) {protege_name} MID={mid2} SMTP={smtp_host}:{smtp_port} size≈{est_zip_mb:.2f}MB")
-            if COPY_TO_SENT and imap_host:
-                err2 = imap_append_sent(imap_host, sender, pwd, msg2.as_bytes())
-                if err2: log_message(log_dir, f"IMAP APPEND échec {protege_name} MID={mid2}: {err2}")
-                else:    log_message(log_dir, f"IMAP APPEND OK {protege_name} MID={mid2}")
-            if move_after_ok:
-                _archive_and_clear_files(log_dir, protege_name, files)
-            return True
+            if success:
+                log_message(log_dir, f"OK {protege_name} via send_email")
+                if move_after_ok:
+                    _archive_and_clear_files(log_dir, protege_name, files)
+                return True
+            else:
+                log_message(log_dir, f"FAIL SMTP {protege_name} via send_email (result accepted=False)")
+                return False
+
         except Exception as e:
-            log_message(log_dir, f"Fallback zip FAIL {protege_name}: {e}")
+            log_message(log_dir, f"FAIL {protege_name} via send_email: {e}")
             return False
-        finally:
-            if tmpdir: shutil.rmtree(tmpdir, ignore_errors=True)
 
 def _archive_and_clear_files(run_dir: str, protege_name: str, files: List[str]) -> None:
     dest_dir = os.path.join(run_dir, "sent", protege_name)
@@ -235,10 +183,12 @@ def _archive_and_clear_files(run_dir: str, protege_name: str, files: List[str]) 
                 pass
 
 # ---------- Orchestrateur ----------
-async def effectuer_rapport_ASH_async_limited(status_callback=print) -> None:
+async def effectuer_rapport_ASH_async_limited(status_callback) -> None:
     sender, pwd, recipient, subj_tpl, body_tpl = get_env()
     run_dir = init_log_session()
     tri, yr, suffix = current_trimester()
+    load_dotenv()
+    move_after_ok = ic(not bool(os.getenv("TEST_MODE", "1")))
 
     status_callback("Préparation des envois…")
     proteges = _list_proteges(PROTEGES_DIR)
@@ -264,7 +214,7 @@ async def effectuer_rapport_ASH_async_limited(status_callback=print) -> None:
                 tri=tri, yr=yr, suffix=suffix,
                 files=files,
                 log_dir=run_dir,
-                move_after_ok=True,
+                move_after_ok=move_after_ok
             )
         )
 
@@ -276,4 +226,4 @@ async def effectuer_rapport_ASH_async_limited(status_callback=print) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(effectuer_rapport_ASH_async_limited()) 
+    asyncio.run(effectuer_rapport_ASH_async_limited(status_callback=ic)) 

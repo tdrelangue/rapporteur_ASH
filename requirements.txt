@@ -2,3 +2,7 @@ customtkinter
 python-dotenv
 Pillow
 asyncio
+imap_tools
+icecream
+imaplib
+Email

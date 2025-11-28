@@ -108,7 +108,7 @@ def add_Email2box(msg, box, IMAP_SERVER, MAIL_PASSWORD, MAIL_USERNAME):
         ic("LOGIN:", typ, data)
 
         # date_time=None → server sets current date/time
-        typ, data = imap.append(box, "", None, msg.as_bytes()) #type:ignore
+        typ, data = imap.append(box, b"", None, msg.as_bytes()) #type:ignore
         ic("APPEND:", typ, data)
 
 

@@ -1,0 +1,2 @@
+[2025-11-28 09:30:57] No attachment found for TEST test, skipped.
+[2025-11-28 09:30:57] Résumé: 0 succès, 0 échecs.

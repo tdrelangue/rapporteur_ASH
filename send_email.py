@@ -9,7 +9,7 @@ from Email import compose_email  # réutilisé
 from imap_handler import *
 
 from icecream import ic
-ic.disable()
+# ic.disable()
 
 B64_OVERHEAD = float(os.getenv("B64_OVERHEAD", "1.37"))
 MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))  # seuil avant zip
@@ -54,7 +54,7 @@ def smtp_connect():
     port = int(os.getenv("SMTP_PORT", "465"))
     use_ssl = os.getenv("SMTP_SSL", "1") == "1"
     user = os.getenv("email")
-    pwd  = os.getenv("imap_pwd")
+    pwd  = os.getenv("email_pwd")
     if use_ssl:
         s = smtplib.SMTP_SSL(host, port, timeout=60)
         s.ehlo()
@@ -67,20 +67,16 @@ def smtp_connect():
     return s
 
 def smtp_send_verified(msg: EmailMessage):
-    """Envoi SMTP avec DSN si (et seulement si) annoncé. Retourne un dict état."""
-    
-
     want_dsn = os.getenv("SMTP_REQUEST_DSN", "1") == "1"
     res = {"accepted": False, "used_dsn": False, "message_id": msg["Message-ID"], "copied_sent": False}
 
-    s = smtp_connect()  # doit créer SMTP/SMTP_SSL et faire login
+    s = smtp_connect()
     try:
-        # S'assurer d'un EHLO après connexion ET après STARTTLS éventuel
         try:
             s.ehlo()
         except Exception:
             pass
-        # Certains smtp_connect() encapsulent STARTTLS; sinon:
+
         if hasattr(s, "starttls") and getattr(s, "_tls_established", False) is False:
             try:
                 s.starttls()
@@ -89,22 +85,25 @@ def smtp_send_verified(msg: EmailMessage):
                 pass
 
         feats = getattr(s, "esmtp_features", {}) or {}
-        # has_extn gère les cas-insensibles si dispo
         support_dsn = (hasattr(s, "has_extn") and s.has_extn("dsn")) or ("dsn" in feats)
 
-        rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"]
-        mail_opts = []  # or "RET=HDRS"
+        # >>> FIX : DSN seulement si demandé ET supporté
+        if want_dsn and support_dsn:
+            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"]
+        else:
+            rcpt_opts = []
         res["used_dsn"] = bool(rcpt_opts)
 
         try:
             if rcpt_opts:
-                s.send_message(msg, mail_options=mail_opts, rcpt_options=rcpt_opts)
-                
+                s.send_message(msg, mail_options=[], rcpt_options=rcpt_opts)
             else:
-                s.send_message(msg, mail_options=mail_opts)
+                s.send_message(msg, mail_options=[])
+
             res["accepted"] = True
+
         except smtplib.SMTPRecipientsRefused as e:
-            # Si le serveur a interprété NOTIFY comme partie de l'adresse, retente sans DSN
+            # Si DSN a été rejeté, retenter sans DSN
             err = next(iter(e.recipients.values()))
             if b"NOTIFY=" in err[1] or "NOTIFY=" in str(err[1]):
                 s.send_message(msg, mail_options=[])
@@ -112,10 +111,12 @@ def smtp_send_verified(msg: EmailMessage):
                 res["used_dsn"] = False
             else:
                 raise
+
     finally:
         try: s.quit()
         except Exception: s.close()
     return res
+
 
 
 def send_email(ctx=None, dev=False):
@@ -147,24 +148,24 @@ def send_email(ctx=None, dev=False):
     # 3) Pièces jointes + zip si trop gros
     
     tmpdir = None
-    size_mb = est_smtp_mb(attachments)
+    size_mb = est_smtp_mb(ctx["attachments"])
     if size_mb > MAX_MB:
-        attachments, tmpdir = zip_all(ctx["name"], attachments)
-    attach_files(msg, attachments)
+        ctx["attachments"], tmpdir = zip_all(ctx["name"], ctx["attachments"])
+    attach_files(msg, ctx["attachments"])
 
     # 4) Envoi SMTP vérifié
     result = smtp_send_verified(msg)
 
-    # %) Enregistrement IMAP
-    IMAP_PASSWORD = os.getenv('imap_pwd')
-    MAIL_USERNAME = os.getenv('email','assistante.drelangue@orange.fr')
-    IMAP_SERVER = guess_imap_host(MAIL_USERNAME)
+    # 5) Enregistrement IMAP
+    MAIL_PASSWORD = ic(os.getenv('email_pwd'))
+    MAIL_USERNAME = ic(os.getenv('email','assistante.drelangue@orange.fr'))
+    IMAP_SERVER = guess_imap_host(MAIL_USERNAME) #type:ignore
 
-    box = os.getenv('Mailbox_name',find_closest_folder("INBOX/ASH", MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
-    add_Email2box(msg, box, IMAP_SERVER, IMAP_PASSWORD, MAIL_USERNAME)
+    box, _ = ic(find_closest_folder(os.getenv('Mailbox_name',"ash"), MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
+    add_Email2box(msg, box, IMAP_SERVER, MAIL_PASSWORD, MAIL_USERNAME)
 
-    box = os.getenv('Sent_name', find_sent_folder(MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
-    add_Email2box(msg, box, IMAP_SERVER, IMAP_PASSWORD, MAIL_USERNAME)
+    box, _, _= ic(find_sent_folder(MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
+    add_Email2box(msg, box, IMAP_SERVER, MAIL_PASSWORD, MAIL_USERNAME)
 
     wait_for_email(box, msg["Subject"], MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)
 
@@ -179,6 +180,8 @@ def send_email(ctx=None, dev=False):
     ic(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
     ic(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {MAX_MB} MB)")
     if size_mb > MAX_MB: ic("→ Fichiers zippés avant envoi.")
+
+    return bool(result.get("accepted"))
 
 if __name__ == "__main__":
     ic.enable()

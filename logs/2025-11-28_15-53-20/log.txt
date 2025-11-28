@@ -1,0 +1,3 @@
+[2025-11-28 15:53:20] TEST test: tentative via send_email, taille SMTP≈1.05MB (seuil info 19.0MB)
+[2025-11-28 15:53:30] OK TEST test via send_email
+[2025-11-28 15:53:30] Résumé: 1 succès, 0 échecs.

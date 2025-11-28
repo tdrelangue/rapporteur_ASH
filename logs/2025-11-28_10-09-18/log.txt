@@ -1,0 +1,3 @@
+[2025-11-28 10:09:18] TEST test: tentative via send_email, taille SMTP≈1.05MB (seuil info 19.0MB)
+[2025-11-28 10:09:18] FAIL TEST test via send_email: cannot access local variable 'attachments' where it is not associated with a value
+[2025-11-28 10:09:18] Résumé: 0 succès, 1 échecs.
