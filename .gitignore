@@ -1,4 +1,5 @@
 .qodo
-dist\
-logs\
-build\
+dist
+logs
+build
+Protégés
