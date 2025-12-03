@@ -8,7 +8,8 @@ import platform
 from dotenv import load_dotenv, set_key
 from PIL import Image
 import asyncio
-from Rapports_trimestriel_ASH import effectuer_rapport_ASH_async_limited
+from Rapports_trimestriel import effectuer_rapport_async_limited
+from config import Config
 
 def resource_path(relative_path):
     try:
@@ -26,6 +27,7 @@ class ASHGUI(ctk.CTk):
         super().__init__()
         self.title("Envoi de Rapports ASH")
         self.geometry("400x350")
+        self.ENV_FILE = ".env"
         self.grid_columnconfigure(0, weight=1)
         system = platform.system()
         if system == "Windows":
@@ -69,7 +71,8 @@ class ASHGUI(ctk.CTk):
 
         self.status_label.configure(text="Envoi des rapports en cours...")
         try:
-            asyncio.run(effectuer_rapport_ASH_async_limited(status_callback=update_status))
+            config = Config.load(self.ENV_FILE, mode="ASH")
+            asyncio.run(effectuer_rapport_async_limited(config=config,status_callback=update_status))
             self.status_label.configure(text="Rapports envoyés avec succès !")
             messagebox.showinfo("Succès", "Les rapports ont été envoyés avec succès !")
         except Exception as e:
@@ -101,7 +104,7 @@ class SettingsWindow(ctk.CTkToplevel):
         # Icon logic (unchanged)
         import platform
         if platform.system() == "Windows":
-            self.iconbitmap(resource_path("assets/icon.ico"))
+            self.iconbitmap(resource_path("assets/icon_32x32.ico"))
         else:
             self.icon_img = PhotoImage(file=resource_path("assets/icon_64x64.png"))
             self.iconphoto(False, self.icon_img)
@@ -143,8 +146,21 @@ class SettingsWindow(ctk.CTkToplevel):
                     row=i, column=1, columnspan=2, padx=10, pady=5, sticky="ew"
                 )
 
+        # Bouton pour modifier le template HTML APA
+        ctk.CTkButton(
+            self,
+            text="Modifier le modèle d’e-mail",
+            command=self.open_template_editor,
+        ).grid(
+            row=len(self.vars),
+            column=0,
+            columnspan=3,
+            pady=(0, 15)
+        )
+
+
         ctk.CTkButton(self, text="Enregistrer", command=self.save_settings).grid(
-            row=len(self.vars), column=0, columnspan=3, pady=15
+            row=len(self.vars) + 1, column=0, columnspan=3, pady=15
         )
 
     def toggle_password(self):
@@ -157,8 +173,119 @@ class SettingsWindow(ctk.CTkToplevel):
             set_key(ENV_FILE, key, var.get())
         messagebox.showinfo("Enregistré", "Paramètres enregistrés avec succès !")
         self.destroy()
+    
+    def open_template_editor(self):
+
+        try:
+            cfg = Config.load(ENV_FILE)
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible de charger la configuration :\n{e}")
+            return
+
+        TemplateEditorWindow(self, cfg)
+
+
+class TemplateEditorWindow(ctk.CTkToplevel):
+    def __init__(self, parent, cfg: Config):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.title("Modèle d’e-mail APA")
+        self.geometry("800x600")
+
+        # Layout
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(3, weight=1)
+
+        base_dir = os.path.dirname(ENV_FILE) or "."
+        tpl_dir = os.path.join(base_dir, cfg.template.TEMPLATE_DIR)
+
+        self.subject_path = os.path.join(tpl_dir, cfg.template.subject_template_name)
+        self.body_html_path = os.path.join(tpl_dir, cfg.template.body_html_template_name)
+
+        # Chargement des fichiers (ou valeurs par défaut)
+        subject_txt = ""
+        body_html = ""
+
+        try:
+            with open(self.subject_path, "r", encoding="utf-8") as f:
+                # on enlève juste les retours de ligne en fin, le reste on garde tel quel
+                subject_txt = f.read().strip("\r\n")
+        except FileNotFoundError:
+            subject_txt = "Rapport APA Trimestre {tri} Année {year} – {name}"
+
+        try:
+            with open(self.body_html_path, "r", encoding="utf-8") as f:
+                body_html = f.read()
+        except FileNotFoundError:
+            body_html = (
+                "<p>Bonjour,</p>\n"
+                "<p>Veuillez trouver ci-joint le rapport trimestriel APA pour "
+                "<strong>{name}</strong><br>\n"
+                "({tri} TR {year}, envoyé le {date}).</p>\n"
+                "<p>Cordialement,<br>\n"
+                "{sender_name}<br>\n"
+                "{sender_role}</p>\n"
+            )
+
+        # Widgets
+        ctk.CTkLabel(self, text="Objet du mail (template)").grid(
+            row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky="w"
+        )
+        self.subject_entry = ctk.CTkEntry(self)
+        self.subject_entry.grid(
+            row=1, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew"
+        )
+        self.subject_entry.insert(0, subject_txt)
+
+        ctk.CTkLabel(self, text="Corps du mail (HTML)").grid(
+            row=2, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="w"
+        )
+        self.body_text = ctk.CTkTextbox(self, wrap="word")
+        self.body_text.grid(
+            row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="nsew"
+        )
+        self.body_text.insert("1.0", body_html)
+
+        ctk.CTkButton(self, text="Enregistrer", command=self.save_templates).grid(
+            row=4, column=0, padx=10, pady=(0, 10), sticky="w"
+        )
+        ctk.CTkButton(self, text="Fermer", command=self.destroy).grid(
+            row=4, column=1, padx=10, pady=(0, 10), sticky="e"
+        )
+
+        self.transient(parent)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+
+    def save_templates(self):
+        # Sujet : on force sur une seule ligne, sans \r/\n
+        subject = self.subject_entry.get().replace("\r\n", " ").replace("\n", " ").strip()
+        try:
+            os.makedirs(os.path.dirname(self.subject_path), exist_ok=True)
+            with open(self.subject_path, "w", encoding="utf-8") as f:
+                f.write(subject)
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible d’enregistrer le sujet :\n{e}")
+            return
+
+        # Corps HTML
+        body_html = self.body_text.get("1.0", "end").rstrip()
+        try:
+            os.makedirs(os.path.dirname(self.body_html_path), exist_ok=True)
+            with open(self.body_html_path, "w", encoding="utf-8") as f:
+                f.write(body_html + "\n")
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible d’enregistrer le corps HTML :\n{e}")
+            return
+
+        messagebox.showinfo("Succès", "Modèle d’e-mail enregistré.")
+        self.destroy()
+
 
 if __name__ == "__main__":
+    config = Config.load(".env", mode="APA")
+
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
     app = ASHGUI()

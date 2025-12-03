@@ -1,0 +1,3 @@
+[2025-12-03 11:49:51] TEST test: tentative via send_email (APA), taille SMTP≈0.21MB (seuil info 19.0MB)
+[2025-12-03 11:49:55] OK TEST test via send_email (APA)
+[2025-12-03 11:49:55] Résumé: 1 succès, 0 échecs.

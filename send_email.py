@@ -1,38 +1,33 @@
 # send_email.py
-import os, smtplib, imaplib, zipfile, tempfile, shutil
+
+import os
+import smtplib
+import zipfile
+import tempfile
+import shutil
 from email.message import EmailMessage
 from email.utils import make_msgid, formatdate
 from datetime import datetime
-import  time, re
 from dotenv import load_dotenv
-from Email import compose_email  # réutilisé
-from imap_handler import *
 
-from icecream import ic
-# ic.disable()
+from Email import compose_email  # ton composeur de message
+import config
+from imap_handler import add_email_to_box, find_sent_folder, find_best_folder  # nouveau handler IMAP
+from config import Config  # config centralisée
 
-B64_OVERHEAD = float(os.getenv("B64_OVERHEAD", "1.37"))
-MAX_MB = float(os.getenv("SMTP_MAX_MB", "19"))  # seuil avant zip
-IMAP_COPY_SENT = os.getenv("IMAP_COPY_SENT", "0") == "1"
-IMAP_SENT_FOLDER = os.getenv("IMAP_SENT_FOLDER", '"Sent"')
 
-def guess_imap_host(email: str | None) -> str | None:
-    if email is None:
-        return None
-    domain = email.split("@")[-1].lower()
-    
-    if any(k in domain.split(".")[0] for k in ("outlook","hotmail","live","office365")):
-        return "outlook.office365.com"
-    if "yahoo" in domain:
-        return "imap.mail.yahoo.com"
-    
-    return f"imap.{domain}"
+# --------------------------------------------------------------------
+# OUTILS GÉNÉRAUX
+# --------------------------------------------------------------------
+
 
 def bytes_size(paths):
     return sum(os.path.getsize(p) for p in paths if os.path.isfile(p))
 
-def est_smtp_mb(paths):
-    return bytes_size(paths) * B64_OVERHEAD / (1024*1024)
+
+def est_smtp_mb(paths, config: Config):
+    return bytes_size(paths) * config.smtp.b64_overhead / (1024 * 1024)
+
 
 def zip_all(label, paths):
     tmpdir = tempfile.mkdtemp(prefix=f"mailzip_{label}_")
@@ -42,35 +37,61 @@ def zip_all(label, paths):
             zf.write(p, arcname=os.path.basename(p))
     return [zpath], tmpdir
 
+
 def attach_files(msg: EmailMessage, paths):
     for p in paths:
         with open(p, "rb") as f:
-            msg.add_attachment(f.read(), maintype="application", subtype="octet-stream",
-                               filename=os.path.basename(p))
+            msg.add_attachment(
+                f.read(),
+                maintype="application",
+                subtype="octet-stream",
+                filename=os.path.basename(p),
+            )
 
-def smtp_connect():
-    load_dotenv(override=True)
-    host = os.getenv("SMTP_HOST", "smtp.orange.fr")
-    port = int(os.getenv("SMTP_PORT", "465"))
-    use_ssl = os.getenv("SMTP_SSL", "1") == "1"
-    user = os.getenv("email")
-    pwd  = os.getenv("email_pwd")
+
+# --------------------------------------------------------------------
+# SMTP
+# --------------------------------------------------------------------
+
+def smtp_connect(config: Config):
+
+    host = config.smtp.host
+    port = config.smtp.port
+    use_ssl = config.smtp.use_ssl
+    user = config.identity.email
+    pwd = config.identity.email_pwd
+
     if use_ssl:
         s = smtplib.SMTP_SSL(host, port, timeout=60)
         s.ehlo()
     else:
         s = smtplib.SMTP(host, port, timeout=60)
         s.ehlo()
-        try: s.starttls(); s.ehlo()
-        except smtplib.SMTPException: pass
-    s.login(user, pwd) # pyright: ignore[reportArgumentType]
+        try:
+            s.starttls()
+            s.ehlo()
+        except smtplib.SMTPException:
+            pass
+
+    s.login(user, pwd)  # pyright: ignore[reportArgumentType]
     return s
 
-def smtp_send_verified(msg: EmailMessage):
-    want_dsn = os.getenv("SMTP_REQUEST_DSN", "1") == "1"
-    res = {"accepted": False, "used_dsn": False, "message_id": msg["Message-ID"], "copied_sent": False}
 
-    s = smtp_connect()
+def smtp_send_verified(msg: EmailMessage, config: Config):
+    """
+    Envoi SMTP avec DSN si (et seulement si) annoncé par le serveur
+    et activé via SMTP_REQUEST_DSN.
+    Retourne un dict {accepted, used_dsn, message_id, copied_sent}.
+    """
+
+    res = {
+        "accepted": False,
+        "used_dsn": False,
+        "message_id": msg["Message-ID"],
+        "copied_sent": False,
+    }
+
+    s = smtp_connect(config)
     try:
         try:
             s.ehlo()
@@ -87,11 +108,7 @@ def smtp_send_verified(msg: EmailMessage):
         feats = getattr(s, "esmtp_features", {}) or {}
         support_dsn = (hasattr(s, "has_extn") and s.has_extn("dsn")) or ("dsn" in feats)
 
-        # >>> FIX : DSN seulement si demandé ET supporté
-        if want_dsn and support_dsn:
-            rcpt_opts = ["NOTIFY=SUCCESS,FAILURE,DELAY"]
-        else:
-            rcpt_opts = []
+        rcpt_opts = [config.smtp.dsn_options] if (config.smtp.request_dsn and support_dsn) else None
         res["used_dsn"] = bool(rcpt_opts)
 
         try:
@@ -99,11 +116,9 @@ def smtp_send_verified(msg: EmailMessage):
                 s.send_message(msg, mail_options=[], rcpt_options=rcpt_opts)
             else:
                 s.send_message(msg, mail_options=[])
-
             res["accepted"] = True
-
         except smtplib.SMTPRecipientsRefused as e:
-            # Si DSN a été rejeté, retenter sans DSN
+            # Si le serveur a interprété NOTIFY comme partie de l'adresse, retente sans DSN
             err = next(iter(e.recipients.values()))
             if b"NOTIFY=" in err[1] or "NOTIFY=" in str(err[1]):
                 s.send_message(msg, mail_options=[])
@@ -111,15 +126,32 @@ def smtp_send_verified(msg: EmailMessage):
                 res["used_dsn"] = False
             else:
                 raise
-
     finally:
-        try: s.quit()
-        except Exception: s.close()
+        try:
+            s.quit()
+        except Exception:
+            s.close()
+
     return res
 
+# --------------------------------------------------------------------
+# FONCTION PRINCIPALE D’ENVOI
+# --------------------------------------------------------------------
 
+def send_email(config: Config, ctx=None, dev=False ) -> bool:
+    """
+    ctx : dict contenant au minimum :
+        - name
+        - tri
+        - year
+        - date
+        - sender_name
+        - sender_role
+        - attachments : liste de chemins
 
-def send_email(ctx=None, dev=False):
+    Retourne True si SMTP a accepté le message.
+    """
+
     if ctx is None:
         attachments = [
             "Protégés/TEST test/COS Drelangue.pdf"
@@ -129,60 +161,93 @@ def send_email(ctx=None, dev=False):
             "tri": 3,
             "year": 2025,
             "date": datetime.now().strftime("%d/%m/%Y"),
-            "sender_name": os.getenv("NameSender", ""),
-            "sender_role": os.getenv("Role", ""),
-            "attachments": attachments
+            "sender_name": config.identity.name_sender,
+            "sender_role": config.identity.role,
+            "attachments": attachments,
         }
-    # 2) Compose le message (subject + corps depuis templates/.env)
-    msg = compose_email(ctx)  # From/To/Subject/Body déjà posés
+
+    # 1) Compose le message (subject + corps depuis templates/.env)
+    msg = compose_email(config=config, context=ctx)  # From/To/Subject/Body déjà posés
     mid = msg["Message-ID"]
 
-    load_dotenv(override=True)
-    sender = os.getenv("email", "expediteur@example.com")
+    sender_env = config.identity.email
+    if config.smtp.request_dsn:
+        # Demande d'accusé de lecture (MDN)
+        msg["Disposition-Notification-To"] = sender_env
+        # Variante ancienne encore utilisée
+        msg["Return-Receipt-To"] = sender_env
 
-    # Demande d'accusé de lecture (MDN)
-    msg["Disposition-Notification-To"] = sender
-    # Vieille variante encore utilisée par certains clients
-    msg["Return-Receipt-To"] = sender
-
-    # 3) Pièces jointes + zip si trop gros
-    
+    # 2) Pièces jointes + zip si trop gros
+    attachments = ctx["attachments"]
     tmpdir = None
-    size_mb = est_smtp_mb(ctx["attachments"])
-    if size_mb > MAX_MB:
-        ctx["attachments"], tmpdir = zip_all(ctx["name"], ctx["attachments"])
-    attach_files(msg, ctx["attachments"])
 
-    # 4) Envoi SMTP vérifié
-    result = smtp_send_verified(msg)
+    size_mb = est_smtp_mb(attachments, config=config)
+    if size_mb > config.smtp.max_mb:
+        attachments, tmpdir = zip_all(ctx["name"], attachments)
+        ctx["attachments"] = attachments
 
-    # 5) Enregistrement IMAP
-    MAIL_PASSWORD = ic(os.getenv('email_pwd'))
-    MAIL_USERNAME = ic(os.getenv('email','assistante.drelangue@orange.fr'))
-    IMAP_SERVER = guess_imap_host(MAIL_USERNAME) #type:ignore
+    attach_files(msg, attachments)
 
-    box, _ = ic(find_closest_folder(os.getenv('Mailbox_name',"ash"), MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
-    add_Email2box(msg, box, IMAP_SERVER, MAIL_PASSWORD, MAIL_USERNAME)
 
-    box, _, _= ic(find_sent_folder(MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)) #type:ignore
-    add_Email2box(msg, box, IMAP_SERVER, MAIL_PASSWORD, MAIL_USERNAME)
+    # 3) Envoi SMTP vérifié
+    result = smtp_send_verified(msg, config)
 
-    wait_for_email(box, msg["Subject"], MAIL_PASSWORD, MAIL_USERNAME, IMAP_SERVER)
+    # 4) Copie IMAP “Envoyés” via imap_handler (optionnelle)
+    if config.imap.copy_sent and result["accepted"]:
+        user = config.identity.email
+        pwd = config.identity.email_pwd
+        server = config.imap.host
 
-    # 6) Nettoyage zip si créé
-    if tmpdir: shutil.rmtree(tmpdir, ignore_errors=True)
+        if server and user and pwd:
+            sent_folder, _, _ = find_sent_folder(server, user, pwd, config.imap.sentbox_name)
+            APA_folder = config.imap.mailbox_name
+            if sent_folder:
+                err = add_email_to_box(server, user, pwd, sent_folder, msg.as_bytes())
+                result["copied_sent"] = (err is None)
+                if not dev and err:
+                    print(f"[IMAP] Append échec: {err}")
+            else:
+                if not dev:
+                    print("[IMAP] Impossible de déterminer le dossier 'Envoyés'.")
+            if APA_folder:
+                APA_folder, _ = find_best_folder(
+                                    target_name=APA_folder, 
+                                    IMAP_SERVER=server, 
+                                    MAIL_USERNAME=user, 
+                                    MAIL_PASSWORD=pwd)
+                err = add_email_to_box(server, user, pwd, APA_folder, msg.as_bytes())
+                result["copied_sent"] = (err is None)
+                if not dev and err:
+                    print(f"[IMAP] Append échec: {err}")
+            else:
+                if not dev:
+                    print(f"[IMAP] Impossible de déterminer le dossier '{APA_folder}'.")
 
-    # 7) Rapport console
-    ic("=== ENVOI ===")
-    ic(f"Message-ID: {mid}")
-    ic(f"SMTP accepté: {result['accepted']}")
-    ic(f"DSN utilisé: {result['used_dsn']}")
-    ic(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
-    ic(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {MAX_MB} MB)")
-    if size_mb > MAX_MB: ic("→ Fichiers zippés avant envoi.")
+    # 5) Nettoyage zip si créé
+    if tmpdir:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    if config.smtp.request_dsn:
+        result['used_dsn']=True
 
-    return bool(result.get("accepted"))
+    # 6) Rapport console
+    if not dev:
+        print("=== ENVOI ===")
+        print(f"Message-ID: {mid}")
+        print(f"SMTP accepté: {result['accepted']}")
+        print(f"DSN utilisé: {result['used_dsn']}")
+        print(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
+        print(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {config.smtp.max_mb} MB)")
+        if size_mb > config.smtp.max_mb:
+            print("→ Fichiers zippés avant envoi.")
+
+    return bool(result.get("accepted")) # TODO : change to full result and correct subsequent functions
+
+
+# --------------------------------------------------------------------
+# TEST LOCAL
+# --------------------------------------------------------------------
 
 if __name__ == "__main__":
-    ic.enable()
-    send_email()
+    # Test simple : envoi d'un mail avec ctx par défaut
+    ok = send_email(config=Config.load(mode="ASH"))
+    print("Résultat send_email() :", ok)
