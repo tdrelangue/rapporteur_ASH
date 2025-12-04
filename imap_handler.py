@@ -7,6 +7,8 @@ from difflib import SequenceMatcher
 from Email import *
 
 from config import Config 
+from icecream import ic
+ic.disable()
 
 # -----------------------------------------------------------
 # UTILITAIRES
@@ -200,8 +202,9 @@ def wait_for_email(
 # -----------------------------------------------------------
 
 if __name__ == "__main__":
+    ic.enable()
     # On passe par la config centrale (et donc .env) UNIQUEMENT ici
-    cfg = Config.load(".env",mode="APA")
+    cfg = Config.load(".env",mode="ASH")
 
     MAIL_USERNAME = cfg.identity.email
     MAIL_PASSWORD = cfg.identity.email_pwd
@@ -209,27 +212,27 @@ if __name__ == "__main__":
     SENTBOX_NAME = cfg.imap.sentbox_name or "INBOX/OUTBOX"
     IMAP_SERVER = cfg.imap.host
 
-    print(f"\nIMAP SERVER : {IMAP_SERVER}")
-    print(f"USERNAME    : {MAIL_USERNAME}")
+    ic(f"\nIMAP SERVER : {IMAP_SERVER}")
+    ic(f"USERNAME    : {MAIL_USERNAME}")
 
     # --- Liste des dossiers ---
-    print("\n---- Dossiers IMAP ----")
+    ic("\n---- Dossiers IMAP ----")
     folders = imap_list_folders(IMAP_SERVER, MAIL_USERNAME, MAIL_PASSWORD)
     for f in folders:
-        print(" -", f)
+        ic(" -", f)
 
     # --- Recherche dossier cible ---
     target = MAILBOX_NAME
 
     best, score = find_closest_folder(target, folders)
-    print(f"Closest folder pour '{target}' → {best} (score {score:.2f})")
+    ic(f"Closest folder pour '{target}' → {best} (score {score:.2f})")
 
     # --- Détection “envoyés” ---
     sent_detected, score, alias = find_sent_folder(IMAP_SERVER, MAIL_USERNAME, MAIL_PASSWORD)
-    print(f"\nDossier Envoyés détecté → {sent_detected} (alias {alias}, score {score:.2f})")
+    ic(f"\nDossier Envoyés détecté → {sent_detected} (alias {alias}, score {score:.2f})")
 
     # --- Append email test ---
-    print("\n---- Test append ----")
+    ic("\n---- Test append ----")
     dest_box = target
 
     test_msg = EmailMessage()
@@ -240,13 +243,13 @@ if __name__ == "__main__":
 
     raw = test_msg.as_bytes()
     err = add_email_to_box(IMAP_SERVER, MAIL_USERNAME, MAIL_PASSWORD, dest_box, raw)
-    print("Résultat append :", "OK" if err is None else err)
+    ic("Résultat append :", "OK" if err is None else err)
 
     # --- Attente email ---
-    print("\n---- Test attente email ----")
+    ic("\n---- Test attente email ----")
 
     box_wait = dest_box
     subject_wait = "TEST_IMAP_HANDLER"
 
     found = wait_for_email(IMAP_SERVER, MAIL_USERNAME, MAIL_PASSWORD, box_wait, subject_wait)
-    print("Résultat attente :", "Trouvé" if found else "Non trouvé")
+    ic("Résultat attente :", "Trouvé" if found else "Non trouvé")

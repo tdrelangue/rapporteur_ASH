@@ -6,3 +6,4 @@ imap_tools
 icecream
 imaplib
 Email
+PyInstaller

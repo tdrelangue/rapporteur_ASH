@@ -3,7 +3,6 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 from dotenv import load_dotenv
-from regex import template
 
 
 def guess_imap_host(email: str) -> str:

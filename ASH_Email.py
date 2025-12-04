@@ -10,6 +10,8 @@ from PIL import Image
 import asyncio
 from Rapports_trimestriel import effectuer_rapport_async_limited
 from config import Config
+from icecream import ic
+ic.disable()
 
 def resource_path(relative_path):
     try:
@@ -19,6 +21,7 @@ def resource_path(relative_path):
     return os.path.join(base_path, relative_path)
 
 ENV_FILE = resource_path(".env")
+MODE = "ASH"
 
 load_dotenv(override=True)
 
@@ -27,24 +30,24 @@ class ASHGUI(ctk.CTk):
         super().__init__()
         self.title("Envoi de Rapports ASH")
         self.geometry("400x350")
-        self.ENV_FILE = ".env"
+        self.ENV_FILE = r".env"
         self.grid_columnconfigure(0, weight=1)
         system = platform.system()
         if system == "Windows":
-            icon_path = resource_path("assets/icon.ico")
+            icon_path = resource_path(r"assets\\icon.ico")
             if os.path.exists(icon_path):
                 try:
                     self.iconbitmap(icon_path)
                 except Exception as e:
-                    print(f"Windows icon load failed: {e}")
+                    ic(f"Windows icon load failed: {e}")
         else:  # macOS and Linux
-            icon_path = resource_path("assets/icon_64x64.png")
+            icon_path = resource_path(r"assets\\icon_64x64.png")
             if os.path.exists(icon_path):
                 try:
                     self.icon_img = PhotoImage(file=icon_path)
                     self.iconphoto(False, self.icon_img)
                 except Exception as e:
-                    print(f"Unix icon load failed: {e}")
+                    ic(f"Unix icon load failed: {e}")
 
         try:
             logo_path = resource_path(r"assets\\ASH.png")
@@ -177,7 +180,7 @@ class SettingsWindow(ctk.CTkToplevel):
     def open_template_editor(self):
 
         try:
-            cfg = Config.load(ENV_FILE)
+            cfg = Config.load(ENV_FILE,MODE)
         except Exception as e:
             messagebox.showerror("Erreur", f"Impossible de charger la configuration :\n{e}")
             return
@@ -284,7 +287,9 @@ class TemplateEditorWindow(ctk.CTkToplevel):
 
 
 if __name__ == "__main__":
-    config = Config.load(".env", mode="APA")
+    config = Config.load(".env", mode=MODE)
+    if config.paths.test_mode:
+        ic.enable()
 
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")

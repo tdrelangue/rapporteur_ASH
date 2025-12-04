@@ -14,7 +14,8 @@ from Email import compose_email  # ton composeur de message
 import config
 from imap_handler import add_email_to_box, find_sent_folder, find_best_folder  # nouveau handler IMAP
 from config import Config  # config centralisée
-
+from icecream import ic
+ic.disable()
 
 # --------------------------------------------------------------------
 # OUTILS GÉNÉRAUX
@@ -205,10 +206,10 @@ def send_email(config: Config, ctx=None, dev=False ) -> bool:
                 err = add_email_to_box(server, user, pwd, sent_folder, msg.as_bytes())
                 result["copied_sent"] = (err is None)
                 if not dev and err:
-                    print(f"[IMAP] Append échec: {err}")
+                    ic(f"[IMAP] Append échec: {err}")
             else:
                 if not dev:
-                    print("[IMAP] Impossible de déterminer le dossier 'Envoyés'.")
+                    ic("[IMAP] Impossible de déterminer le dossier 'Envoyés'.")
             if APA_folder:
                 APA_folder, _ = find_best_folder(
                                     target_name=APA_folder, 
@@ -218,10 +219,10 @@ def send_email(config: Config, ctx=None, dev=False ) -> bool:
                 err = add_email_to_box(server, user, pwd, APA_folder, msg.as_bytes())
                 result["copied_sent"] = (err is None)
                 if not dev and err:
-                    print(f"[IMAP] Append échec: {err}")
+                    ic(f"[IMAP] Append échec: {err}")
             else:
                 if not dev:
-                    print(f"[IMAP] Impossible de déterminer le dossier '{APA_folder}'.")
+                    ic(f"[IMAP] Impossible de déterminer le dossier '{APA_folder}'.")
 
     # 5) Nettoyage zip si créé
     if tmpdir:
@@ -231,14 +232,14 @@ def send_email(config: Config, ctx=None, dev=False ) -> bool:
 
     # 6) Rapport console
     if not dev:
-        print("=== ENVOI ===")
-        print(f"Message-ID: {mid}")
-        print(f"SMTP accepté: {result['accepted']}")
-        print(f"DSN utilisé: {result['used_dsn']}")
-        print(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
-        print(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {config.smtp.max_mb} MB)")
+        ic("=== ENVOI ===")
+        ic(f"Message-ID: {mid}")
+        ic(f"SMTP accepté: {result['accepted']}")
+        ic(f"DSN utilisé: {result['used_dsn']}")
+        ic(f"Copié 'Envoyés' IMAP: {result['copied_sent']}")
+        ic(f"Taille estimée SMTP avant envoi: {size_mb:.2f} MB (seuil {config.smtp.max_mb} MB)")
         if size_mb > config.smtp.max_mb:
-            print("→ Fichiers zippés avant envoi.")
+            ic("→ Fichiers zippés avant envoi.")
 
     return bool(result.get("accepted")) # TODO : change to full result and correct subsequent functions
 
@@ -248,6 +249,7 @@ def send_email(config: Config, ctx=None, dev=False ) -> bool:
 # --------------------------------------------------------------------
 
 if __name__ == "__main__":
+    ic.enable()
     # Test simple : envoi d'un mail avec ctx par défaut
     ok = send_email(config=Config.load(mode="ASH"))
-    print("Résultat send_email() :", ok)
+    ic("Résultat send_email() :", ok)

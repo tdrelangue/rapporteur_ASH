@@ -9,7 +9,8 @@ from datetime import datetime, date
 
 from config import Config
 from send_email import send_email  # version modernisée qu'on vient de corriger
-
+from icecream import ic
+ic.disable()
 
 # ---------- Utilitaires ----------
 def log_message(log_dir: str, txt: str) -> None:
@@ -18,7 +19,7 @@ def log_message(log_dir: str, txt: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(path, "a", encoding="utf-8") as f:
         f.write(f"[{ts}] {txt}\n")
-    print(txt)
+    ic(txt)
 
 
 def init_log_session(base_log_dir: str) -> str:
@@ -216,6 +217,7 @@ async def effectuer_rapport_async_limited(config: Config | None = None, status_c
 
 
 if __name__ == "__main__":
+    ic.enable()
     config = Config.load(".env",mode="ASH")
     asyncio.run(effectuer_rapport_async_limited(config=config))
 
